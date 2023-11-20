@@ -1,4 +1,3 @@
-import json
 import unittest
 from test.api.container import TestContainer
 from test.base_test import TestWithCredentials
@@ -11,13 +10,14 @@ from test.data.hazard_model_store import (
 import numpy as np
 import numpy.testing
 
-from physrisk import RiverineInundation, requests
+from physrisk import requests
 from physrisk.container import Container
+from physrisk.data.hazard_data_provider import HazardDataHint
 from physrisk.data.inventory import EmbeddedInventory
 from physrisk.data.pregenerated_hazard_model import ZarrHazardModel
 from physrisk.data.zarr_reader import ZarrReader
-from physrisk.hazard_models.embedded import get_default_source_paths
-from physrisk.kernel.hazards import ChronicHeat
+from physrisk.hazard_models.core_hazards import get_default_source_paths
+from physrisk.kernel.hazards import ChronicHeat, RiverineInundation
 
 
 class TestDataRequests(TestWithCredentials):
@@ -49,9 +49,17 @@ class TestDataRequests(TestWithCredentials):
         result_flood_hist = source_paths[RiverineInundation](
             indicator_id="flood_depth", scenario="historical", year=2080
         )
+        result_heat_hint = source_paths[ChronicHeat](
+            indicator_id="mean_degree_days/above/32c",
+            scenario="rcp8p5",
+            year=2050,
+            hint=HazardDataHint(path="chronic_heat/osc/v2/mean_degree_days_v2_above_32c_CMCC-ESM2_{scenario}_{year}"),
+        )
+
         assert result_heat == "chronic_heat/osc/v2/mean_degree_days_v2_above_32c_ACCESS-CM2_rcp8p5_2050"
         assert result_flood == "inundation/wri/v2/inunriver_rcp8p5_MIROC-ESM-CHEM_2050"
         assert result_flood_hist == "inundation/wri/v2/inunriver_historical_000000000WATCH_1980"
+        assert result_heat_hint == "chronic_heat/osc/v2/mean_degree_days_v2_above_32c_CMCC-ESM2_rcp8p5_2050"
 
     def test_zarr_reading(self):
         request_dict = {
@@ -78,13 +86,11 @@ class TestDataRequests(TestWithCredentials):
             ZarrHazardModel(source_paths=get_default_source_paths(EmbeddedInventory()), reader=ZarrReader(store=store)),
         )
 
-        result.items[0].intensity_curve_set[0].intensities
-
-        numpy.testing.assert_array_almost_equal_nulp(result.items[0].intensity_curve_set[0].intensities, np.zeros((8)))
+        numpy.testing.assert_array_almost_equal_nulp(result.items[0].intensity_curve_set[0].intensities, np.zeros((9)))
         numpy.testing.assert_array_almost_equal_nulp(
-            result.items[0].intensity_curve_set[1].intensities, np.linspace(0.1, 1.0, 8, dtype="f4")
+            result.items[0].intensity_curve_set[1].intensities, np.linspace(0.1, 1.0, 9, dtype="f4")
         )
-        numpy.testing.assert_array_almost_equal_nulp(result.items[0].intensity_curve_set[2].intensities, np.zeros((8)))
+        numpy.testing.assert_array_almost_equal_nulp(result.items[0].intensity_curve_set[2].intensities, np.zeros((9)))
 
     def test_zarr_reading_chronic(self):
         request_dict = {
@@ -112,11 +118,24 @@ class TestDataRequests(TestWithCredentials):
         )
         numpy.testing.assert_array_almost_equal_nulp(result.items[0].intensity_curve_set[0].intensities[0], 600.0)
 
+        # request_with_hint = request.copy()
+        # request_with_hint.items[0].path = "chronic_heat/osc/v2/mean_degree_days_v2_above_32c_CMCC-ESM2_rcp8p5_2050"
+        # result = requests._get_hazard_data(
+        #    request_with_hint, ZarrHazardModel(source_paths=source_paths, reader=ZarrReader(store))
+        # )
+
     @unittest.skip("requires OSC environment variables set")
     def test_zarr_reading_live(self):
         # needs valid OSC_S3_BUCKET, OSC_S3_ACCESS_KEY, OSC_S3_SECRET_KEY
         container = Container()
         requester = container.requester()
+
+        import json
+        from zipfile import ZipFile
+
+        with ZipFile("src/test/api/test_lat_lons.json.zip") as z:
+            with z.open("test_lat_lons.json") as f:
+                data = json.loads(f.read())
 
         request1 = {
             "items": [
@@ -127,7 +146,21 @@ class TestDataRequests(TestWithCredentials):
                     "latitudes": TestData.latitudes,
                     "year": 2030,
                     "scenario": "ssp585",
-                    "model": "mean_work_loss/high",
+                    "indicator_id": "mean_work_loss/high",
+                }
+            ],
+        }
+
+        request1 = {
+            "items": [
+                {
+                    "request_item_id": "test_inundation",
+                    "event_type": "ChronicHeat",
+                    "longitudes": data["longitudes"],
+                    "latitudes": data["latitudes"],
+                    "year": 2030,
+                    "scenario": "ssp585",
+                    "indicator_id": "mean_work_loss/high",
                 }
             ],
         }

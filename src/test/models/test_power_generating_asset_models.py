@@ -8,10 +8,10 @@ import numpy as np
 
 import physrisk.api.v1.common
 import physrisk.data.static.world as wd
-from physrisk import calculate_impacts
 from physrisk.kernel import Asset, PowerGeneratingAsset
 from physrisk.kernel.assets import IndustrialActivity, RealEstateAsset
 from physrisk.kernel.hazard_model import HazardEventDataResponse
+from physrisk.kernel.impact import calculate_impacts
 from physrisk.utils.lazy import lazy_import
 from physrisk.vulnerability_models.power_generating_asset_models import InundationModel
 
@@ -21,7 +21,7 @@ pd = lazy_import("pandas")
 class TestPowerGeneratingAssetModels(TestWithCredentials):
     """Tests World Resource Institute (WRI) models for power generating assets."""
 
-    def test_innundation(self):
+    def test_inundation(self):
         # exceedance curve
         return_periods = np.array([2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0])
         base_depth = np.array(

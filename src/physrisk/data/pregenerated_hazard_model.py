@@ -1,10 +1,13 @@
 from collections import defaultdict
 from typing import Dict, List, Mapping, MutableMapping, Optional, cast
 
+import numpy as np
+
 from physrisk.data.zarr_reader import ZarrReader
 from physrisk.kernel.hazards import Hazard, HazardKind
 
 from ..kernel.hazard_model import (
+    HazardDataFailedResponse,
     HazardDataRequest,
     HazardDataResponse,
     HazardEventDataResponse,
@@ -32,36 +35,48 @@ class PregeneratedHazardModel(HazardModel):
             if Hazard.kind(k) == HazardKind.chronic
         )
 
-    def get_hazard_events(self, requests: List[HazardDataRequest]) -> Mapping[HazardDataRequest, HazardDataResponse]:
+    def get_hazard_events(  # noqa: C901
+        self, requests: List[HazardDataRequest]
+    ) -> Mapping[HazardDataRequest, HazardDataResponse]:
         batches = defaultdict(list)
         for request in requests:
             batches[request.group_key()].append(request)
 
         responses: MutableMapping[HazardDataRequest, HazardDataResponse] = {}
         for key in batches.keys():
-            batch: List[HazardDataRequest] = batches[key]
-            event_type, indicator_id, scenario, year = (
-                batch[0].hazard_type,
-                batch[0].indicator_id,
-                batch[0].scenario,
-                batch[0].year,
-            )
-            longitudes = [req.longitude for req in batch]
-            latitudes = [req.latitude for req in batch]
-            if event_type.kind == HazardKind.acute:  # type: ignore
-                intensities, return_periods = self.acute_hazard_data_providers[event_type].get_intensity_curves(
-                    longitudes, latitudes, indicator_id=indicator_id, scenario=scenario, year=year
+            try:
+                batch: List[HazardDataRequest] = batches[key]
+                hazard_type, indicator_id, scenario, year, hint = (
+                    batch[0].hazard_type,
+                    batch[0].indicator_id,
+                    batch[0].scenario,
+                    batch[0].year,
+                    batch[0].hint,
                 )
+                longitudes = [req.longitude for req in batch]
+                latitudes = [req.latitude for req in batch]
+                if hazard_type.kind == HazardKind.acute:  # type: ignore
+                    intensities, return_periods = self.acute_hazard_data_providers[hazard_type].get_intensity_curves(
+                        longitudes, latitudes, indicator_id=indicator_id, scenario=scenario, year=year, hint=hint
+                    )
 
-                for i, req in enumerate(batch):
-                    responses[req] = HazardEventDataResponse(return_periods, intensities[i, :])
-            elif event_type.kind == HazardKind.chronic:  # type: ignore
-                parameters = self.chronic_hazard_data_providers[event_type].get_parameters(
-                    longitudes, latitudes, indicator_id=indicator_id, scenario=scenario, year=year
-                )
+                    for i, req in enumerate(batch):
+                        valid = ~np.isnan(intensities[i, :])
+                        valid_periods, valid_intensities = return_periods[valid], intensities[i, :][valid]
+                        if len(valid_periods) == 0:
+                            valid_periods, valid_intensities = np.array([100]), np.array([0])
+                        responses[req] = HazardEventDataResponse(valid_periods, valid_intensities)
+                elif hazard_type.kind == HazardKind.chronic:  # type: ignore
+                    parameters, defns = self.chronic_hazard_data_providers[hazard_type].get_parameters(
+                        longitudes, latitudes, indicator_id=indicator_id, scenario=scenario, year=year, hint=hint
+                    )
 
+                    for i, req in enumerate(batch):
+                        responses[req] = HazardParameterDataResponse(parameters[i, :], defns)
+            except Exception as err:
+                # e.g. the requested data is unavailable
                 for i, req in enumerate(batch):
-                    responses[req] = HazardParameterDataResponse(parameters[i])
+                    responses[req] = HazardDataFailedResponse(err)
         return responses
 
 

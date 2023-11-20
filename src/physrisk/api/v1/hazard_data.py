@@ -30,15 +30,21 @@ class MapInfo(BaseModel):
     """Provides information about map layer."""
 
     colormap: Optional[Colormap] = Field(description="Details of colormap.")
-    array_name: Optional[str] = Field(
-        description="Name of array reprojected to Web Mercator for on-the-fly display or to hash to obtain tile ID. If not supplied, convention is to add '_map' to array_name."  # noqa
+    path: str = Field(
+        description="Name of array reprojected to Web Mercator for on-the-fly display or to hash to obtain tile ID. If not supplied, convention is to add '_map' to path."  # noqa
     )
-    bounds: Optional[List[Tuple[float, float]]] = Field(
+    bounds: List[Tuple[float, float]] = Field(
         [(-180.0, 85.0), (180.0, 85.0), (180.0, -85.0), (-180.0, -85.0)],
         description="Bounds (top/left, top/right, bottom/right, bottom/left) as degrees. Note applied to map reprojected into Web Mercator CRS.",  # noqa
     )
     # note that the bounds should be consistent with the array attributes
-    source: Optional[str] = Field(description="Source of map image: 'map_array' or 'tiles'.")
+    source: Optional[str] = Field(
+        description="""Source of map image. These are
+                            'map_array': single Mercator projection array at path above
+                            'map_array_pyramid': pyramid of Mercator projection arrays
+                            'mapbox'.
+                                  """
+    )
 
 
 class Period(BaseModel):
@@ -53,7 +59,7 @@ class Scenario(BaseModel):
 
     id: str
     years: List[int]
-    periods: Optional[List[Period]]
+    # periods: Optional[List[Period]]
 
 
 def expanded(item: str, key: str, param: str):
@@ -69,6 +75,11 @@ class HazardResource(BaseModel):
     indicator_id: str = Field(
         description="Identifier of the hazard indicator (i.e. the modelled quantity), e.g. 'flood_depth'."
     )
+    indicator_model_id: Optional[str] = Field(
+        None,
+        description="Identifier specifying the type of model used in the derivation of the indicator "
+        "(e.g. whether flood model includes impact of sea-level rise).",
+    )
     indicator_model_gcm: str = Field(
         description="Identifier of general circulation model(s) used in the derivation of the indicator."
     )
@@ -78,7 +89,7 @@ class HazardResource(BaseModel):
     description: str = Field(
         description="Brief description in mark down of the indicator and model that generated the indicator."
     )
-    map: Optional[MapInfo] = Field(description="Optional information used for display of the indicator in a map.")
+    map: Optional[MapInfo] = Field(None, description="Optional information used for display of the indicator in a map.")
     scenarios: List[Scenario] = Field(description="Climate change scenarios for which the indicator is available.")
     units: str = Field(description="Units of the hazard indicator.")
 
@@ -101,13 +112,13 @@ def expand_resource(
     resource: HazardResource, keys: List[str], params: Dict[str, List[str]]
 ) -> Iterable[HazardResource]:
     if len(keys) == 0:
-        yield resource.copy(deep=True, update={"params": {}})
+        yield resource.model_copy(deep=True, update={"params": {}})
     else:
         keys = keys.copy()
         key = keys.pop()
         for item in expand_resource(resource, keys, params):
             for param in params[key]:
-                yield item.copy(
+                yield item.model_copy(
                     deep=True,
                     update={
                         "indicator_id": expand(item.indicator_id, key, param),
@@ -117,13 +128,9 @@ def expand_resource(
                         "map": None
                         if item.map is None
                         else (
-                            item.map.copy(
+                            item.map.model_copy(
                                 deep=True,
-                                update={
-                                    "array_name": expand(
-                                        item.map.array_name if item.map.array_name is not None else "", key, param
-                                    )
-                                },
+                                update={"path": expand(item.map.path if item.map.path is not None else "", key, param)},
                             )
                         ),
                     },
@@ -141,9 +148,9 @@ class InventorySource(Flag):
 
 
 class HazardAvailabilityRequest(BaseModel):
-    types: Optional[List[str]]  # e.g. ["RiverineInundation"]
+    types: Optional[List[str]] = []  # e.g. ["RiverineInundation"]
     sources: Optional[List[str]] = Field(
-        description="Sources of inventory, can be 'embedded', 'hazard' or 'hazard_test'."
+        None, description="Sources of inventory, can be 'embedded', 'hazard' or 'hazard_test'."
     )
 
 
@@ -164,11 +171,11 @@ class HazardDataRequestItem(BaseModel):
     longitudes: List[float]
     latitudes: List[float]
     request_item_id: str
-    hazard_type: Optional[str]  # e.g. RiverineInundation
-    event_type: Optional[str]  # e.g. RiverineInundation; deprecated: use hazard_type
+    hazard_type: Optional[str] = None  # e.g. RiverineInundation
+    event_type: Optional[str] = None  # e.g. RiverineInundation; deprecated: use hazard_type
     indicator_id: str
-    indicator_model_gcm: Optional[str]
-    path: Optional[str]
+    indicator_model_gcm: Optional[str] = ""
+    path: Optional[str] = None
     scenario: str  # e.g. rcp8p5
     year: int
 
@@ -181,7 +188,7 @@ class HazardDataRequest(BaseHazardRequest):
 class HazardDataResponseItem(BaseModel):
     intensity_curve_set: List[IntensityCurve]
     request_item_id: str
-    event_type: str
+    event_type: Optional[str]
     model: str
     scenario: str
     year: int

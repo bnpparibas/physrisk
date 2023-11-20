@@ -24,8 +24,8 @@ class ZarrReader:
     # environment variable names:
     __access_key = "OSC_S3_ACCESS_KEY"
     __secret_key = "OSC_S3_SECRET_KEY"
-    __S3_bucket = "OSC_S3_BUCKET"  # e.g. redhat-osc-physical-landing-647521352890 on staging
-    __zarr_path = "OSC_S3_HAZARD_PATH"  # e.g. hazard/hazard.zarr on staging
+    __S3_bucket = "OSC_S3_BUCKET"  # e.g. physrisk-hazard-indicators
+    __zarr_path = "OSC_S3_HAZARD_PATH"  # hazard/hazard.zarr
 
     def __init__(
         self,
@@ -60,7 +60,7 @@ class ZarrReader:
     def create_s3_zarr_store(cls, get_env: Callable[[str, Optional[str]], str] = get_env):
         access_key = get_env(cls.__access_key, None)
         secret_key = get_env(cls.__secret_key, None)
-        s3_bucket = get_env(cls.__S3_bucket, "redhat-osc-physical-landing-647521352890")
+        s3_bucket = get_env(cls.__S3_bucket, "physrisk-hazard-indicators")
         zarr_path = get_env(cls.__zarr_path, "hazard/hazard.zarr")
 
         s3 = s3fs.S3FileSystem(anon=False, key=access_key, secret=secret_key)
@@ -92,15 +92,12 @@ class ZarrReader:
         path = self._path_provider(set_id) if self._path_provider is not None else set_id
         z = self._root[path]  # e.g. inundation/wri/v2/<filename>
 
-        # OSC-specific attributes contain tranform and return periods
+        # OSC-specific attributes contain transform and return periods
         t = z.attrs["transform_mat3x3"]  # type: ignore
         transform = Affine(t[0], t[1], t[2], t[3], t[4], t[5])
 
         # in the case of acute risks, index_values will contain the return periods
-        index_values = z.attrs.get("index_values", [0])
-        if index_values is None:
-            index_values = [0]
-
+        index_values = self.get_index_values(z)
         image_coords = self._get_coordinates(longitudes, latitudes, transform)
 
         if interpolation == "floor":
@@ -119,6 +116,12 @@ class ZarrReader:
         else:
             raise ValueError("interpolation must have value 'floor', 'linear', 'max' or 'min")
 
+    def get_index_values(self, z: zarr.Array):
+        index_values = z.attrs.get("index_values", [0])
+        if index_values is None:
+            index_values = [0]
+        return index_values
+
     def get_max_curves(self, set_id, longitudes, latitudes, interpolation="floor", delta_km=1.0, n_grid=5):
         """Get maximal intensity curve for a grid around a given latitude and longitude coordinate pair.
 
@@ -136,9 +139,9 @@ class ZarrReader:
             (no. coordinate pairs, no. return periods).
             return_periods: return periods in years.
         """
-        KILOMETRES_PER_DEGREE = 110.574
+        kilometres_per_degree = 110.574
         n_data = len(latitudes)
-        delta_deg = delta_km / KILOMETRES_PER_DEGREE
+        delta_deg = delta_km / kilometres_per_degree
         grid = np.linspace(-0.5, 0.5, n_grid)
         lats_grid_baseline = np.broadcast_to(latitudes.reshape((n_data, 1, 1)), (len(latitudes), n_grid, n_grid))
         lons_grid_baseline = np.broadcast_to(longitudes.reshape((n_data, 1, 1)), (len(longitudes), n_grid, n_grid))
@@ -174,7 +177,7 @@ class ZarrReader:
 
         data = z.get_coordinate_selection((iz, iy, ix))  # type: ignore # index, row, column
 
-        NAN_VALUE = -9999.0
+        nan_value = -9999.0
 
         if interpolation == "linear":
             xf = image_coords[0, :][..., None] - icx  # type: ignore
@@ -184,28 +187,28 @@ class ZarrReader:
             w2 = (1 - yf) * xf
             w3 = yf * xf
             w = np.transpose(np.array([w0, w1, w2, w3]), (1, 0, 2))
-            mask = 1 - np.isnan(np.where(data == NAN_VALUE, np.nan, data))
+            mask = 1 - np.isnan(np.where(data == nan_value, np.nan, data))
             w_good = w * mask
             w_good_sum = np.transpose(
                 np.sum(w_good, axis=1).reshape(tuple([1]) + np.sum(w_good, axis=1).shape), axes=(1, 0, 2)
             )
             w_used = np.divide(w_good, np.where(w_good_sum == 0.0, np.nan, w_good_sum))
-            return np.nan_to_num(np.sum(w_used * data, axis=1), nan=NAN_VALUE)
+            return np.nan_to_num(np.sum(w_used * data, axis=1), nan=nan_value)
 
         elif interpolation == "max":
-            data = np.where(data == NAN_VALUE, -np.inf, data)
+            data = np.where(data == nan_value, -np.inf, data)
             return np.nan_to_num(
                 np.maximum.reduce([data[:, 0, :], data[:, 1, :], data[:, 2, :], data[:, 3, :]]),
-                nan=NAN_VALUE,
-                neginf=NAN_VALUE,
+                nan=nan_value,
+                neginf=nan_value,
             )
 
         elif interpolation == "min":
-            data = np.where(data == NAN_VALUE, np.inf, data)
+            data = np.where(data == nan_value, np.inf, data)
             return np.nan_to_num(
                 np.minimum.reduce([data[:, 0, :], data[:, 1, :], data[:, 2, :], data[:, 3, :]]),
-                nan=NAN_VALUE,
-                posinf=NAN_VALUE,
+                nan=nan_value,
+                posinf=nan_value,
             )
 
         else:
