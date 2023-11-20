@@ -1,0 +1,25 @@
+# Workflow to sync 
+
+name: Merge upstream main branch
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '15 * * * *'
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Merge upstream
+        run: |
+          git config --global user.name 'Joe Moorhouse'
+          git config --global user.email 'joe.moorhouse@gmail.com'
+
+          # "git checkout main" already run
+          git pull --unshallow  
+          git remote add upstream https://github.com/os-climate/physrisk-ui
+          git fetch upstream
+
+          git checkout main
+          git merge --no-edit upstream/main
+          git push origin main
