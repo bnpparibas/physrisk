@@ -17,7 +17,7 @@ jobs:
 
           # "git checkout main" already run
           git pull --unshallow  
-          git remote add upstream https://github.com/os-climate/physrisk-ui
+          git remote add upstream https://github.com/os-climate/physrisk
           git fetch upstream
 
           git checkout main
