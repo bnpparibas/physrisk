@@ -1,26 +1,27 @@
 import unittest
-from test.data.hazard_model_store import TestData, mock_hazard_model_store_heat_WBGT
+from test.data.hazard_model_store import TestData, mock_hazard_model_store_heat_wbgt
 from typing import Iterable, List, Union, cast
 
 import numpy as np
 
 from physrisk.data.pregenerated_hazard_model import ZarrHazardModel
-from physrisk.kernel import calculation
+from physrisk.hazard_models.core_hazards import get_default_source_paths
 from physrisk.kernel.assets import Asset, IndustrialActivity
 from physrisk.kernel.hazard_model import HazardDataRequest, HazardDataResponse, HazardParameterDataResponse
 from physrisk.kernel.hazards import ChronicHeat
+from physrisk.kernel.impact import calculate_impacts
 from physrisk.kernel.impact_distrib import ImpactDistrib, ImpactType
-from physrisk.models.chronic_heat_models import ChronicHeatGznModel, get_impact_distrib
+from physrisk.vulnerability_models.chronic_heat_models import ChronicHeatGZNModel, get_impact_distrib
 
 
-class ExampleWbgtGzJointModel(ChronicHeatGznModel):
+class ExampleWBGTGZNJointModel(ChronicHeatGZNModel):
 
     """Example implementation of the wbgt chronic heat model. This model
     inherits attributes from the ChronicHeatGZN model and estimate the
     results based on applying both GZN and WBGT"""
 
-    def __init__(self, model: str = "mean_work_loss_high"):
-        super().__init__(model, ChronicHeat)  # opportunity to give a model hint, but blank here
+    def __init__(self, indicator_id: str = "mean_work_loss_high"):
+        super().__init__(indicator_id, ChronicHeat)  # opportunity to give a model hint, but blank here
 
     def work_type_mapping(self):
         return {"low": ["low", "medium"], "medium": ["medium", "low", "high"], "high": ["high", "medium"]}
@@ -56,7 +57,7 @@ class ExampleWbgtGzJointModel(ChronicHeatGznModel):
                     asset.latitude,
                     scenario="historical",
                     year=2010,
-                    model=model_wbgt + i_asset_types,
+                    indicator_id=model_wbgt + i_asset_types,
                 )
             )
 
@@ -67,7 +68,7 @@ class ExampleWbgtGzJointModel(ChronicHeatGznModel):
                     asset.latitude,
                     scenario=scenario,
                     year=year,
-                    model=model_wbgt + i_asset_types,
+                    indicator_id=model_wbgt + i_asset_types,
                 )
             )
 
@@ -78,7 +79,7 @@ class ExampleWbgtGzJointModel(ChronicHeatGznModel):
                 asset.latitude,
                 scenario="historical",
                 year=1980,
-                model=model_gzn,
+                indicator_id=model_gzn,
             ),
             HazardDataRequest(
                 self.hazard_type,
@@ -86,7 +87,7 @@ class ExampleWbgtGzJointModel(ChronicHeatGznModel):
                 asset.latitude,
                 scenario=scenario,
                 year=year,
-                model=model_gzn,
+                indicator_id=model_gzn,
             ),
         ] + wbgt_data_requests
 
@@ -176,21 +177,19 @@ class TestChronicAssetImpact(unittest.TestCase):
     """Tests the impact on an asset of a chronic hazard model."""
 
     def test_wbgt_vulnerability(self):
-        store = mock_hazard_model_store_heat_WBGT(TestData.longitudes, TestData.latitudes)
-        hazard_model = ZarrHazardModel(source_paths=calculation.get_default_zarr_source_paths(), store=store)
-
+        store = mock_hazard_model_store_heat_wbgt(TestData.longitudes, TestData.latitudes)
+        hazard_model = ZarrHazardModel(source_paths=get_default_source_paths(), store=store)
+        # 'chronic_heat/osc/v2/mean_work_loss_high_ACCESS-CM2_historical_2005'
         scenario = "ssp585"
         year = 2050
 
-        vulnerability_models = {IndustrialActivity: [ExampleWbgtGzJointModel()]}
+        vulnerability_models = {IndustrialActivity: [ExampleWBGTGZNJointModel()]}
 
         assets = [
             IndustrialActivity(lat, lon, type="high") for lon, lat in zip(TestData.longitudes, TestData.latitudes)
         ][:1]
 
-        results = calculation.calculate_impacts(
-            assets, hazard_model, vulnerability_models, scenario=scenario, year=year
-        )
+        results = calculate_impacts(assets, hazard_model, vulnerability_models, scenario=scenario, year=year)
 
         value_test = list(results.values())[0].impact.prob
 

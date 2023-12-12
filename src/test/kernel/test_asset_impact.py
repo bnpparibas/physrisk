@@ -1,15 +1,19 @@
 """ Test asset impact calculations."""
 import unittest
-from typing import Dict, List, Tuple
 
 import numpy as np
 
-from physrisk import ExceedanceCurve, HazardEventDistrib, RiverineInundation, VulnerabilityDistrib
-from physrisk.kernel.assets import Asset, RealEstateAsset
+from physrisk.kernel.assets import RealEstateAsset
+from physrisk.kernel.curve import ExceedanceCurve
+from physrisk.kernel.hazard_event_distrib import HazardEventDistrib
 from physrisk.kernel.hazard_model import HazardDataRequest
-from physrisk.kernel.impact_distrib import ImpactDistrib
-from physrisk.kernel.vulnerability_model import VulnerabilityModelBase
-from physrisk.models.real_estate_models import RealEstateCoastalInundationModel, RealEstateRiverineInundationModel
+from physrisk.kernel.hazards import RiverineInundation
+from physrisk.kernel.impact import ImpactDistrib
+from physrisk.kernel.vulnerability_distrib import VulnerabilityDistrib
+from physrisk.vulnerability_models.real_estate_models import (
+    RealEstateCoastalInundationModel,
+    RealEstateRiverineInundationModel,
+)
 
 
 class TestAssetImpact(unittest.TestCase):
@@ -99,7 +103,7 @@ class TestAssetImpact(unittest.TestCase):
 
     def test_performance_hazardlookup(self):
         """Just for reference: not true test"""
-        assetRequests: Dict[Tuple[VulnerabilityModelBase, Asset], List[HazardDataRequest]] = {}
+        asset_requests = {}
         import time
 
         start = time.time()
@@ -117,14 +121,16 @@ class TestAssetImpact(unittest.TestCase):
         # create requests:
         for v in vulnerability_models:
             for a in assets:
-                assetRequests[(v, a)] = [HazardDataRequest(RiverineInundation, 0, 0, model="", scenario="", year=2030)]
+                asset_requests[(v, a)] = [
+                    HazardDataRequest(RiverineInundation, 0, 0, indicator_id="", scenario="", year=2030)
+                ]
 
         time_requests = time.time() - start
         print(f"Time for requests dictionary creation {time_requests}s ")
         start = time.time()
         # read requests:
-        for key in assetRequests:
-            if assetRequests[key][0].longitude != 0:
+        for key in asset_requests:
+            if asset_requests[key][0].longitude != 0:
                 raise Exception()
 
         time_responses = time.time() - start

@@ -1,12 +1,17 @@
+import os
 import unittest
+
+# from pathlib import PurePosixPath
 from test.base_test import TestWithCredentials
 from test.data.hazard_model_store import mock_hazard_model_store_inundation
 
+# import fsspec.implementations.local as local  # type: ignore
 import numpy as np
 import numpy.testing
 import scipy.interpolate
 import zarr
 from fsspec.implementations.memory import MemoryFileSystem
+from shapely import Polygon
 
 from physrisk.api.v1.hazard_data import HazardAvailabilityRequest, HazardResource, Scenario
 from physrisk.data.inventory import EmbeddedInventory, Inventory
@@ -16,12 +21,32 @@ from physrisk.requests import _get_hazard_data_availability
 
 
 class TestEventRetrieval(TestWithCredentials):
-    def test_hazard_data_availability_summary(self):
+    @unittest.skip("S3 access needed")
+    def test_inventory_change(self):
         # check validation passes calling in service-like way
         embedded = EmbeddedInventory()
-        inventory = Inventory(embedded.to_resources())
+
+        resources1 = embedded.to_resources()
+        # fs = local.LocalFileSystem()
+        # base_path = PurePosixPath(__file__).parents[2].joinpath("physrisk", "data", "static")
+        # reader = InventoryReader(fs=fs, base_path=str(base_path))
+        # resources2 = inventory.expand(reader.read("hazard"))
+
+        # inventory1 = Inventory([r for r in resources1 if "chronic_heat" not in r.path]).json_ordered()
+        # inventory2 = Inventory([r for r in resources2 if ("jupiter" not in r.group_id and \
+        # "tas" not in r.id and "chronic_heat" not in r.path)]).json_ordered()
+        inventory2 = Inventory(resources1).json_ordered()
+        # with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "inventory1.json"), 'w') as f:
+        #    f.write(inventory1)
+
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "inventory2.json"), "w") as f:
+            f.write(inventory2)
+
+    def test_hazard_data_availability_summary(self):
+        # check validation passes calling in service-like way
+        inventory = EmbeddedInventory()
         response = _get_hazard_data_availability(
-            HazardAvailabilityRequest(sources=["embedded"]), inventory, embedded.colormaps()
+            HazardAvailabilityRequest(sources=["embedded"]), inventory, inventory.colormaps()
         )  # , "hazard_test"])
         assert len(response.models) > 0  # rely on Pydantic validation for test
 
@@ -29,22 +54,22 @@ class TestEventRetrieval(TestWithCredentials):
         fs = MemoryFileSystem()
         reader = InventoryReader(fs=fs)
         reader.append("hazard_test", [self._test_hazard_model()])
-        assert reader.read("hazard_test")[0].id == "test_model_id"
+        assert reader.read("hazard_test")[0].indicator_id == "test_indicator_id"
 
     @unittest.skip("S3 access needed")
     def test_set_get_inventory_s3(self):
         reader = InventoryReader()
         reader.append("hazard_test", [self._test_hazard_model()])
-        assert reader.read("hazard_test")[0].id == "test_model_id"
+        assert reader.read("hazard_test")[0].id == "test_indicator_id"
 
     def _test_hazard_model(self):
         return HazardResource(
-            type="TestHazardType",
-            path="test_sub_type",
-            id="test_model_id",
-            array_name="test_array_name",
-            display_name="Test model",
-            description="Description of test model",
+            hazard_type="TestHazardType",
+            indicator_id="test_indicator_id",
+            indicator_model_gcm="test_gcm",
+            path="test_array_path",
+            display_name="Test hazard indicator",
+            description="Description of test hazard indicator",
             scenarios=[Scenario(id="historical", years=[2010])],
             units="K",
         )
@@ -128,7 +153,7 @@ class TestEventRetrieval(TestWithCredentials):
         numpy.testing.assert_allclose(candidate_max, expected_max, rtol=1e-6)
         numpy.testing.assert_allclose(candidate_min, expected_min, rtol=1e-6)
 
-    def test_zarr_geomax(self):
+    def test_zarr_geomax_on_grid(self):
         lons_ = np.array([3.92783])
         lats_ = np.array([50.882394])
         curve = np.array(
@@ -140,10 +165,36 @@ class TestEventRetrieval(TestWithCredentials):
         n_grid = 10
         store_ = mock_hazard_model_store_inundation(lons_, lats_, curve)
         zarrreader_ = ZarrReader(store_)
-        curves_max_candidate, _ = zarrreader_.get_max_curves(
+        curves_max_candidate, _ = zarrreader_.get_max_curves_on_grid(
             set_id, lons_, lats_, interpolation=interpolation, delta_km=delta_km, n_grid=n_grid
         )
         curves_max_expected = np.array(
             [[0.00, 0.04917953, 0.1883151, 0.3619907, 0.49083358, 0.61872474, 0.78648075, 0.91052965, 1.03448614]]
         )
         numpy.testing.assert_allclose(curves_max_candidate, curves_max_expected, rtol=1e-6)
+
+    def test_zarr_geomax(self):
+        longitudes = np.array([3.926])
+        latitudes = np.array([50.878])
+        curve = np.array(
+            [0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4],
+        )
+        set_id = r"inundation/wri/v2\\inunriver_rcp8p5_MIROC-ESM-CHEM_2080"
+        delta_deg = 0.1
+        shapes = [
+            Polygon(
+                (
+                    (x - 0.5 * delta_deg, y - 0.5 * delta_deg),
+                    (x - 0.5 * delta_deg, y + 0.5 * delta_deg),
+                    (x + 0.5 * delta_deg, y + 0.5 * delta_deg),
+                    (x + 0.5 * delta_deg, y - 0.5 * delta_deg),
+                )
+            )
+            for x, y in zip(longitudes, latitudes)
+        ]
+        store = mock_hazard_model_store_inundation(longitudes, latitudes, curve)
+        zarr_reader = ZarrReader(store)
+        for interpolation in ["floor", "linear"]:
+            curves_max_candidate, _ = zarr_reader.get_max_curves(set_id, shapes, interpolation=interpolation)
+            curves_max_expected = np.array([[0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4, 0.4]])
+            numpy.testing.assert_allclose(curves_max_candidate, curves_max_expected, rtol=1e-6)

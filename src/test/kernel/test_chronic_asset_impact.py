@@ -6,13 +6,14 @@ import numpy as np
 from scipy.stats import norm
 
 from physrisk.data.pregenerated_hazard_model import ZarrHazardModel
-from physrisk.kernel import calculation
+from physrisk.hazard_models.core_hazards import get_default_source_paths
 from physrisk.kernel.assets import Asset, IndustrialActivity
 from physrisk.kernel.hazard_model import HazardDataRequest, HazardDataResponse, HazardParameterDataResponse
 from physrisk.kernel.hazards import ChronicHeat
+from physrisk.kernel.impact import calculate_impacts
 from physrisk.kernel.impact_distrib import ImpactDistrib, ImpactType
 from physrisk.kernel.vulnerability_model import VulnerabilityModelBase
-from physrisk.models.chronic_heat_models import ChronicHeatGznModel
+from physrisk.vulnerability_models.chronic_heat_models import ChronicHeatGZNModel
 
 
 class ExampleChronicHeatModel(VulnerabilityModelBase):
@@ -22,8 +23,10 @@ class ExampleChronicHeatModel(VulnerabilityModelBase):
     https://www.sphinx-doc.org/en/master/usage/extensions/example_google.html
     """
 
-    def __init__(self, model: str = "mean_degree_days_above_32c", delta: bool = True):
-        super().__init__(model, ChronicHeat)  # opportunity to give a model hint, but blank here
+    def __init__(self, indicator_id: str = "mean_degree_days_above_32c", delta: bool = True):
+        super().__init__(
+            indicator_id=indicator_id, hazard_type=ChronicHeat, impact_type=ImpactType.disruption
+        )  # opportunity to give a model hint, but blank here
 
         self.time_lost_per_degree_day = 4.671  # This comes from the paper converted to celsius
         self.time_lost_per_degree_day_se = 2.2302  # This comes from the paper converted to celsius
@@ -46,7 +49,7 @@ class ExampleChronicHeatModel(VulnerabilityModelBase):
         """
 
         # specify hazard data needed. Model string is hierarchical and '/' separated.
-        model = "mean_degree_days/above/32c"
+        indicator_id = "mean_degree_days/above/32c"
 
         return [
             HazardDataRequest(
@@ -55,7 +58,7 @@ class ExampleChronicHeatModel(VulnerabilityModelBase):
                 asset.latitude,
                 scenario="historical",
                 year=1980,
-                model=model,
+                indicator_id=indicator_id,
             ),
             HazardDataRequest(
                 self.hazard_type,
@@ -63,7 +66,7 @@ class ExampleChronicHeatModel(VulnerabilityModelBase):
                 asset.latitude,
                 scenario=scenario,
                 year=year,
-                model=model,
+                indicator_id=indicator_id,
             ),
         ]
 
@@ -148,22 +151,20 @@ class TestChronicAssetImpact(unittest.TestCase):
         """Testing the generation of an asset when only an impact curve (e.g. damage curve is available)"""
 
         store = mock_hazard_model_store_heat(TestData.longitudes, TestData.latitudes)
-        hazard_model = ZarrHazardModel(source_paths=calculation.get_default_zarr_source_paths(), store=store)
+        hazard_model = ZarrHazardModel(source_paths=get_default_source_paths(), store=store)
         # to run a live calculation, we omit the store parameter
 
         scenario = "ssp585"
         year = 2050
 
-        vulnerability_models = {IndustrialActivity: [ChronicHeatGznModel()]}
+        vulnerability_models = {IndustrialActivity: [ChronicHeatGZNModel()]}
 
         assets = [
             IndustrialActivity(lat, lon, type="Construction")
             for lon, lat in zip(TestData.longitudes, TestData.latitudes)
         ][:1]
 
-        results = calculation.calculate_impacts(
-            assets, hazard_model, vulnerability_models, scenario=scenario, year=year
-        )
+        results = calculate_impacts(assets, hazard_model, vulnerability_models, scenario=scenario, year=year)
 
         value_test = list(results.values())[0].impact.mean_impact()
         value_test = list(results.values())[0].impact.prob

@@ -1,15 +1,25 @@
+import logging
 import math
 from abc import abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, Iterable, Tuple
+from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
 
+from physrisk.data.hazard_data_provider import HazardDataHint
 from physrisk.kernel.assets import Asset
-from physrisk.kernel.hazard_model import HazardDataRequest, HazardDataResponse, HazardParameterDataResponse
+from physrisk.kernel.hazard_model import (
+    HazardDataRequest,
+    HazardDataResponse,
+    HazardEventDataResponse,
+    HazardModel,
+    HazardParameterDataResponse,
+)
 from physrisk.kernel.hazards import ChronicHeat, CombinedInundation, Drought, Fire, Hail, Wind
+from physrisk.kernel.impact import _request_consolidated
 from physrisk.kernel.vulnerability_model import DataRequester
+from physrisk.utils.helpers import get_iterable
 
 
 class Category(Enum):
@@ -30,6 +40,11 @@ class Bounds:
     upper: float
 
 
+@dataclass
+class AssetExposureResult:
+    hazard_categories: Dict[type, Tuple[Category, float]]
+
+
 class ExposureMeasure(DataRequester):
     @abstractmethod
     def get_exposures(
@@ -40,7 +55,7 @@ class ExposureMeasure(DataRequester):
 
 class JupterExposureMeasure(ExposureMeasure):
     def __init__(self):
-        self.exposure_bins: Dict[Tuple[type, str], Tuple[np.ndarray, np.ndarray]] = self.get_exposure_bins()
+        self.exposure_bins = self.get_exposure_bins()
 
     def get_data_requests(self, asset: Asset, *, scenario: str, year: int) -> Iterable[HazardDataRequest]:
         return [
@@ -50,26 +65,33 @@ class JupterExposureMeasure(ExposureMeasure):
                 asset.latitude,
                 scenario=scenario,
                 year=year,
-                model=model,
+                indicator_id=indicator_id,
+                # select specific model for wind for consistency with thresholds
+                hint=HazardDataHint(path="wind/jupiter/v1/max_1min_{scenario}_{year}") if hazard_type == Wind else None,
             )
-            for (hazard_type, model) in self.exposure_bins.keys()
+            for (hazard_type, indicator_id) in self.exposure_bins.keys()
         ]
 
     def get_exposures(self, asset: Asset, data_responses: Iterable[HazardDataResponse]):
         result: Dict[type, Tuple[Category, float]] = {}
         for (k, v), resp in zip(self.exposure_bins.items(), data_responses):
-            assert isinstance(resp, HazardParameterDataResponse)  # should all be parameters
+            if isinstance(resp, HazardParameterDataResponse):
+                param = resp.parameter
+            elif isinstance(resp, HazardEventDataResponse):
+                if len(resp.intensities) > 1:
+                    raise ValueError("single-value curve expected")
+                param = resp.intensities[0]
             (hazard_type, _) = k
             (lower_bounds, categories) = v
-            if math.isnan(resp.parameter):
-                result[hazard_type] = (Category.NODATA, float(resp.parameter))
+            if math.isnan(param):
+                result[hazard_type] = (Category.NODATA, float(param))
             else:
-                index = np.searchsorted(lower_bounds, resp.parameter, side="right") - 1
-                result[hazard_type] = (categories[index], float(resp.parameter))
+                index = np.searchsorted(lower_bounds, param, side="right") - 1
+                result[hazard_type] = (categories[index], float(param))
         return result
 
     def get_exposure_bins(self):
-        categories: Dict[Tuple[type, str], Tuple[np.ndarray, np.ndarray]] = {}
+        categories = {}
         # specify exposure bins as dataclass in case desirable to use JSON in future
         categories[(CombinedInundation, "flooded_fraction")] = self.bounds_to_lookup(
             [
@@ -89,7 +111,7 @@ class JupterExposureMeasure(ExposureMeasure):
                 Bounds(category=Category.HIGHEST, lower=30, upper=float("inf")),
             ]
         )
-        categories[(Wind, "max/1min")] = self.bounds_to_lookup(
+        categories[(Wind, "max_speed")] = self.bounds_to_lookup(
             [
                 Bounds(category=Category.LOWEST, lower=float("-inf"), upper=63),
                 Bounds(category=Category.LOW, lower=63, upper=90),
@@ -131,3 +153,24 @@ class JupterExposureMeasure(ExposureMeasure):
         lower_bounds = np.array([b.lower for b in bounds])
         categories = np.array([b.category for b in bounds])
         return (lower_bounds, categories)
+
+
+def calculate_exposures(
+    assets: List[Asset], hazard_model: HazardModel, exposure_measure: ExposureMeasure, scenario: str, year: int
+) -> Dict[Asset, AssetExposureResult]:
+    requester_assets: Dict[DataRequester, List[Asset]] = {exposure_measure: assets}
+    asset_requests, responses = _request_consolidated(hazard_model, requester_assets, scenario, year)
+
+    logging.info(
+        "Applying exposure measure {0} to {1} assets of type {2}".format(
+            type(exposure_measure).__name__, len(assets), type(assets[0]).__name__
+        )
+    )
+    result: Dict[Asset, AssetExposureResult] = {}
+
+    for asset in assets:
+        requests = asset_requests[(exposure_measure, asset)]  # (ordered) requests for a given asset
+        hazard_data = [responses[req] for req in get_iterable(requests)]
+        result[asset] = AssetExposureResult(hazard_categories=exposure_measure.get_exposures(asset, hazard_data))
+
+    return result

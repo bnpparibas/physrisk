@@ -8,12 +8,12 @@ import numpy as np
 
 import physrisk.api.v1.common
 import physrisk.data.static.world as wd
-from physrisk import calculate_impacts
-from physrisk.kernel import Asset, PowerGeneratingAsset
-from physrisk.kernel.assets import IndustrialActivity, RealEstateAsset
+from physrisk.kernel import Asset, PowerGeneratingAsset, calculation
+from physrisk.kernel.assets import IndustrialActivity, RealEstateAsset, ThermalPowerGeneratingAsset
 from physrisk.kernel.hazard_model import HazardEventDataResponse
-from physrisk.models.power_generating_asset_models import InundationModel
+from physrisk.kernel.impact import calculate_impacts
 from physrisk.utils.lazy import lazy_import
+from physrisk.vulnerability_models.power_generating_asset_models import InundationModel
 
 pd = lazy_import("pandas")
 
@@ -21,7 +21,7 @@ pd = lazy_import("pandas")
 class TestPowerGeneratingAssetModels(TestWithCredentials):
     """Tests World Resource Institute (WRI) models for power generating assets."""
 
-    def test_innundation(self):
+    def test_inundation(self):
         # exceedance curve
         return_periods = np.array([2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0])
         base_depth = np.array(
@@ -67,7 +67,7 @@ class TestPowerGeneratingAssetModels(TestWithCredentials):
 
         # Power generating assets that are of interest
         assets = [
-            PowerGeneratingAsset(lat, lon, generation=gen, primary_fuel=prim_fuel, location=continent, type=prim_fuel)
+            PowerGeneratingAsset(lat, lon, generation=gen, location=continent, type=prim_fuel)
             for lon, lat, gen, prim_fuel, continent in zip(longitudes, latitudes, generation, primary_fuel, continents)
         ]
         detailed_results = calculate_impacts(assets, scenario="ssp585", year=2030)
@@ -106,6 +106,64 @@ class TestPowerGeneratingAssetModels(TestWithCredentials):
         assets_out = self.api_assets(item[0] for item in interesting[0:10])
         with open(os.path.join(cache_folder, "assets_example_real_estate_small.json"), "w") as f:
             f.write(assets_out.json(indent=4))
+        self.assertAlmostEqual(1, 1)
+
+    @unittest.skip("example, not test")
+    def test_thermal_power_generation_portfolio(self):
+        cache_folder = os.environ.get("CREDENTIAL_DOTENV_DIR", os.getcwd())
+
+        asset_list = pd.read_csv(os.path.join(cache_folder, "wri-all.csv"))
+        filtered = asset_list.loc[asset_list["primary_fuel"].isin(["Coal", "Gas", "Nuclear", "Oil"])]
+        filtered = filtered[-60 < filtered["latitude"]]
+
+        longitudes = np.array(filtered["longitude"])
+        latitudes = np.array(filtered["latitude"])
+
+        primary_fuels = np.array(
+            [primary_fuel.replace(" and ", "And").replace(" ", "") for primary_fuel in filtered["primary_fuel"]]
+        )
+
+        # Capacity describes a maximum electric power rate.
+        # Generation describes the actual electricity output of the plant over a period of time.
+        capacities = np.array(filtered["capacity_mw"])
+
+        _, continents = wd.get_countries_and_continents(latitudes=latitudes, longitudes=longitudes)
+
+        # Power generating assets that are of interest
+        assets = [
+            ThermalPowerGeneratingAsset(latitude, longitude, type=primary_fuel, location=continent, capacity=capacity)
+            for latitude, longitude, capacity, primary_fuel, continent in zip(
+                latitudes,
+                longitudes,
+                capacities,
+                primary_fuels,
+                continents,
+            )
+        ]
+
+        scenario = "ssp585"
+        year = 2030
+
+        hazard_model = calculation.get_default_hazard_model()
+        vulnerability_models = calculation.get_default_vulnerability_models()
+
+        results = calculate_impacts(assets, hazard_model, vulnerability_models, scenario=scenario, year=year)
+        out = [
+            {
+                "asset": type(result.asset).__name__,
+                "type": getattr(result.asset, "type") if hasattr(result.asset, "type") else None,
+                "capacity": getattr(result.asset, "capacity") if hasattr(result.asset, "capacity") else None,
+                "location": getattr(result.asset, "location") if hasattr(result.asset, "location") else None,
+                "latitude": result.asset.latitude,
+                "longitude": result.asset.longitude,
+                "impact_mean": results[key].impact.mean_impact(),
+                "hazard_type": results[key].impact.hazard_type.__name__,
+            }
+            for result, key in zip(results, results.keys())
+        ]
+        pd.DataFrame.from_dict(out).to_csv(
+            os.path.join(cache_folder, "thermal_ power_generation_example_" + scenario + "_" + str(year) + ".csv")
+        )
         self.assertAlmostEqual(1, 1)
 
     def api_assets(self, assets: List[Asset]):
