@@ -72,7 +72,7 @@ class RiskScoreValue(BaseModel):
     )
 
 
-class ScoreBasedRiskMeasureDefinition(BaseModel, frozen=True):
+class ScoreBasedRiskMeasureDefinition(BaseModel, frozen=True): # type:ignore
     hazard_types: List[str] = Field([], description="Defines the hazards that the measure is used for.")
     values: List[RiskScoreValue] = Field([], description="Defines the set of values that the score can take.")
     underlying_measures: List[RiskMeasureDefinition] = Field(

@@ -196,7 +196,7 @@ class TestRiskModels(TestWithCredentials):
         container = Container()
 
         class TestHazardModelFactory(HazardModelFactory):
-            def hazard_model(self, interpolation: str = "floor", provider_max_requests: Dict[str, int] = ...):
+            def hazard_model(self, interpolation: str = "floor", provider_max_requests: Dict[str, int] = {}):
                 return hazard_model
 
         container.override_providers(hazard_model_factory=providers.Factory(TestHazardModelFactory))
